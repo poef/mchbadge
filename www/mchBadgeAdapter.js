@@ -6,7 +6,7 @@ export default class mchBadgeAdapter
 	#path;
 	#exceptionHandler;
 	#device;
-	#interfaces;
+	#interfaces = [];
 	#bitstream_state=false;
 	#bitstream_process_state = 0;
 
@@ -18,12 +18,13 @@ export default class mchBadgeAdapter
 
 	async initialize()
 	{
-		this.#device = await nagivator.usb.requestDevice({
+		let device = this.#device = await window.navigator.usb.requestDevice({
 			filters: [{ vendorId: 0x16d0, productId: 0x0f9a}]
 		})
 		await device.open()
 		await device.selectConfiguration(1)
-		device.configuration.interfaces.forEach( async (itf, index) => {
+		for (const index in device.configuration.interfaces) {
+			let itf = device.configuration.interfaces[index]
 			if (itf.alternate.interfaceClass == 0xFF) {
 				await device.claimInterface(index)
 				let endpoints = itf.alternate.endpoints
@@ -42,25 +43,28 @@ export default class mchBadgeAdapter
 				})
 				this.#interfaces.push(usbInterface)
 			}
-		})
-		this.#interfaces.forEach(async usbInterface => {
+		}
+		for (const usbInterface of this.#interfaces) {
 			await this.#sendState(usbInterface, 1)
 			await this.#listen(usbInterface)
-		})
-		await this.#setBaudrate(1, 115200)
-		await this.#setBaudrate(2, 1000000)
-		return this.#resetEsp32ToWebUSB(this.#interfaces[1], 0x00)
+		}
+		await this.#setBaudrate(this.#interfaces[0], 115200)
+		await this.#setBaudrate(this.#interfaces[1], 1000000)
+		return this.#resetEsp32ToWebUSB(this.#interfaces[0], 0x01)
 	}
 
 	async #sendControl(usbInterface, request, value)
 	{
-		let endpoint = usbInterface.epout
+		let endpoint = usbInterface.epOut
 		return this.#device.controlTransferOut({
 			requestType: 'class',
 			recipient: 'interface',
 			request: request,
 			value: value,
 			index: usbInterface.index
+		}).then(result => {
+			console.log(endpoint.endpointNumber, result)
+			return result
 		})
 	}
 
