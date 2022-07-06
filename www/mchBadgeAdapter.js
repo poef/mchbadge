@@ -86,6 +86,8 @@ class mchBadgeDriver
 	#bitstream_state=false
 	#bitstream_process_state = 0
 	messages = {}
+	listeners = []
+	listening = []
 	
 	async sendControl(usbInterface, request, value)
 	{
@@ -154,27 +156,38 @@ class mchBadgeDriver
 	{
 		console.log('msg id '+packet.message_id);
 		let msg = packet.getMessage()
-//		let chunks = msg.match(/.{1,transfersize}/g)
-//		for (let chunk of chunks) {
-			console.log('sendPacket',usbInterface.epOut.endpointNumber,packet,msg)
-			let [command,payloadlength,verify,message_id] = struct("<HIHI").unpack(msg)
-			console.log('parsed', { command: command, payloadlength: payloadlength, verify:verify, message_id:message_id })
-			await this.#device.transferOut(usbInterface.epOut.endpointNumber, msg)
-			await this.wait(50)
-//		}		
-/*		let response = await this.receiveResponse(usbInterface)
+
+		setTimeout(() => {
+			this.#device.transferOut(usbInterface.epOut.endpointNumber, msg)
+		},1)
+
+		let response = await this.receiveResponse(usbInterface, packet.message_id)
 		if (response.message_id!== packet.message_id) {
 			throw new Error('response id '+response.message_id+' does not match packet id '+packet.message_id)
 		}
-		if (response.command!==packet.command.value) {
-			throw new Error('response command '+response.command+' does not match packet '+packet.command.value)
+		if (response.command!==packet.command) {
+			throw new Error('response command '+response.command+' does not match packet '+packet.command)
 		}
 		return response.data
-*/
 	}
 
-	async receiveResponse(usbInterface)
+	async receiveResponse(usbInterface, message_id)
 	{
+		if (!this.listening[usbInterface.index]) { //epIn.endpointNumber]) {
+			this.listen(usbInterface); //epIn.endpointNumber)
+		}
+		return new Promise(async (resolve, reject) => {
+			let timer = setTimeout(() => {
+				reject('timeout')
+			}, 1000)
+			this.listeners[message_id] = (message) => {
+				clearTimeout(timer)
+				delete this.listeners[message_id]
+				delete this.messages[message_id]
+				resolve(message)
+			}
+		})
+/*
 		let maxLength = 1048576 //1MB for now
 		let usbTransferResult
 		do {
@@ -193,6 +206,7 @@ class mchBadgeDriver
 		} else {
 			console.error(usbTransferResult.status, usbTransferResult)
 		}
+*/
 	}
 
 	async initialize()
@@ -232,22 +246,91 @@ class mchBadgeDriver
 		return this.resetEsp32ToWebUSB(this.interfaces[0], 0x01)
 	}
 
+	bufferToString(buffer) {
+		let bytes = new Uint8Array(buffer);
+		return this.bytesToString(bytes)
+	}
+	
+	bytesToString(bytes) {
+		let string = bytes.reduce((prev, curr) => {
+			prev+=' '+curr.toString(16)
+			return prev
+		},'')
+		return string
+	}
+	
 	async listen(usbInterface) {
+		this.listening[usbInterface.index] = true //@FIXME: endpointnumber is incorrect, should be interface index
 		let usbTransferResult
 		let maxLength = 1000000
+		let received = new Uint8Array(0)
 		while(1) {
 			usbTransferResult = await this.#device.transferIn(usbInterface.epIn.endpointNumber, maxLength)
+			
 			if (usbTransferResult.status === 'ok') {
-				if (usbTransferResult.data.byteLength<payloadHeaderLength) {
-					console.log('unknown packet',usbTransferResult)
-					continue
+				console.log('bytestring',this.bufferToString(usbTransferResult.data.buffer))
+				let bytes = new Uint8Array(usbTransferResult.data.buffer)
+				let newReceived = new Uint8Array(received.length + bytes.length)
+				newReceived.set(received)
+				newReceived.set(bytes, received.length)
+				received = newReceived
+				let dead = false
+				let start = false
+				let de = received.indexOf(0xDE)
+				while(de!==-1) {
+					if (received[de+1]===0xAD) {
+						dead = de
+						console.log('dead found at '+de)
+						de = -1;
+					} else {
+						de = received.indexOf(0xDE, de)
+					}
 				}
-				let bytes = new Uint8Array(usbTransferResult.data.buffer);
-				let string = bytes.reduce((prev, curr) => {
-					prev+=' '+curr.toString(16)
-					return prev
-				},'')
-				console.log('bytestring',string)
+				if (dead) {
+					start = dead - 6
+					if (start<0) {
+						console.log('dead found too early')
+						continue
+					}
+					newReceived = new Uint8Array(received.length - start)
+					newReceived.set(received.slice(start))
+					received = newReceived
+					console.log('received', this.bytesToString(received))
+				}
+				let header = false
+				if (start!==false) {
+					if (received.length>payloadHeaderLength) {
+						console.log('jay')
+						let [command,payloadlen,verify,message_id] = struct('<HIHI').unpack(received.buffer)
+						header = {
+							command: command,
+							payloadlen: payloadlen,
+							verify: verify,
+							message_id: message_id
+						}
+						console.log('message header',header)
+					}
+				}
+				let message = false				
+				if (header && received.length>=payloadHeaderLength + header.payloadlen) {
+					let data = received.slice(payloadHeaderLength, payloadHeaderLength+header.payloadlen)
+					message = {
+						command: header.command,
+						message_id: header.message_id,
+						data: data
+					}
+					console.log('message',message)
+					this.messages[message.message_id] = message
+					received = received.slice(payloadHeaderLength+header.payloadlen)
+				}
+				if (message && this.listeners[message.message_id]) {
+					console.log(message.message_id+' found, calling')
+					this.listeners[message.message_id](message)
+				} else if (message) {
+					console.log(message.message_id+' not found', Object.keys(this.listeners))
+				}
+					
+/*
 				let [command,payloadlen,verify,message_id] = struct('<HIHI').unpack(usbTransferResult.data.buffer)
 				let data = new DataView(usbTransferResult.data.buffer, payloadHeaderLength)
 				this.messages[message_id] = {
@@ -256,6 +339,7 @@ class mchBadgeDriver
 					verify: verify
 				}
 				console.log(message_id,this.messages[message_id])
+*/
 			}
 		}
 	}
@@ -313,14 +397,23 @@ class mchBadgeAdapter
 	async #appfsList()
 	{
 		let data = await this.driver.sendPacket(this.driver.interfaces[0], new WebUSBPacket(APFSLIST))
-/*
-		let num_apps = struct('<I').unpack_from(data)
+		console.log('appfsdata',data)
+		let num_apps = struct('<I').unpack(data.buffer)
 		data = data.slice(4)
 		let list = []
 		for(let i=0;i<num_apps;i++) {
-			//@TODO continue here
+			let [appsize, lenname] = struct('<II').unpack(data.buffer)
+			data = data.slice(8)
+			let name = new TextDecoder().decode(data.slice(0,lenname));
+			//let name = data.slice(0,lenname)
+			data = data.slice(lenname)
+			list.push({
+				name: name,
+				size: appsize
+			})
 		}
-*/
+		console.log(list)	
+		return list
 	}
 
 	cd(path)
