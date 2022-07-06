@@ -1,6 +1,9 @@
 <!doctype html>
 <h1>mchBadgeTest</h1>
+<button data-simply-command="init">Connect</button>
+<button data-simply-command="appfs">AppFS</button>
 <div id="out"></div>
+<script src="https://unpkg.com/simplyview@2.0.2/dist/simply.everything.js"></script>
 <script type="module">
 import FileSystem from './jsfs/src/FileSystem.js'
 import {mchBadgeDriver, mchBadgeAdapter} from './mchBadgeAdapter.js'
@@ -9,5 +12,17 @@ const driver = new mchBadgeDriver()
 const badge = new mchBadgeAdapter('/',null,driver)
 window.badge = badge
 console.log(badge)
-driver.initialize()
+            
+const app = simply.app({
+    container: document.body,
+    commands: {
+        init: function(el, value) {
+            driver.initialize()
+        },
+        appfs: function(el, value) {
+            badge.list('/appfs/')            
+        }
+    }
+})
+
 </script>
