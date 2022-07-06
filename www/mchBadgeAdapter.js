@@ -25,20 +25,104 @@ class WebUSBPacket
 	}
 }
 
-export default class mchBadgeAdapter 
+class mchBadgeDriver
 {
+	#device
+	#interfaces = []
+	#bitstream_state=false
+	#bitstream_process_state = 0
 
-	#path;
-	#exceptionHandler;
-	#device;
-	#interfaces = [];
-	#bitstream_state=false;
-	#bitstream_process_state = 0;
-
-	constructor(path, exceptionHandler=null)
+	async sendControl(usbInterface, request, value)
 	{
-		this.#path = path
-		this.#exceptionHandler = exceptionHandler
+		let endpoint = usbInterface.epOut
+		return this.#device.controlTransferOut({
+			requestType: 'class',
+			recipient: 'interface',
+			request: request,
+			value: value,
+			index: usbInterface.index
+		}).then(result => {
+			console.log(endpoint.endpointNumber, result)
+			return result
+		})
+	}
+
+	async sendState(usbInterface, state)
+	{
+		return this.sendControl(usbInterface, 0x22, state)
+	}
+
+	async resetEsp32(usbInterface, bootloader_mode = false)
+	{
+		return this.sendControl(usbInterface, 0x23, bootloader_mode ? 0x01 : 0x00)
+	}
+
+	async setBaudrate(usbInterface, baudrate)
+	{
+		return this.sendControl(usbInterface, 0x24, Math.floor(baudrate/100))
+	}
+
+	async setMode(usbInterface, mode)
+	{
+		return this.sendControl(usbInterface, 0x25, mode)
+	}
+
+	setBitstreamMode(mode) {
+		this.#bitstream_state = mode
+	}
+
+	async wait(time)
+	{
+		return new Promise(r => setTimeout(r, time))
+	}
+
+	async resetEsp32ToWebUSB(usbInterface, webusb_mode = 0x00)
+	{
+		await this.setMode(usbInterface, webusb_mode)
+		await this.wait(50)
+		await this.resetEsp32(usbInterface, false)
+		await this.wait(50)
+		await this.setBaudrate(usbInterface, 115200)
+		await this.wait(50)
+		this.setBitstreamMode(0)
+		if (webusb_mode>0) {
+			await this.wait(3000)
+			await this.setBaudrate(usbInterface, 912600)
+			await this.wait(50)
+			await this.setBaudrate(usbInterface, 912600)
+			await this.setBitstreamMode(webusb_mode==0x02)
+		}
+	}
+
+	async sendPacket(usbInterface, packet, transfersize=2048)
+	{
+		let msg = packet.getMessage()
+		let chunks = msg.match(/.{1,transfersize}/g)
+		for (let chunk of chunks) {
+			await this.#device.transferOut(usbInterface.endpointNumber, chunk)
+			await this.wait(50)
+		}		
+		let response = await this.receiveResponse(usbInterface)
+		if (response.message_id!== packet.message_id) {
+			throw new Error('response id '+response.message_id+' does not match packet id '+packet.message_id)
+		}
+		if (response.command!==packet.command.value) {
+			throw new Error('response command '+response.command+' does not match packet '+packet.command.value)
+		}
+		return response.data
+
+	}
+
+	async receiveResponse(usbInterface)
+	{
+		let maxLength = 1048576 //1MB for now
+		let usbTransferResult = await this.#device.transferIn(usbInterface.endpointNumber, maxLength)
+		if (usbTransferResult.status === 'ok') {
+			let unpacked = struct.unpack_from('<HIHI', usbTransferResult.data.buffer)
+			console.log(unpacked)
+		} else {
+			console.error(usbTransferResult.status, usbTransferResult)
+		}
 	}
 
 	async initialize()
@@ -70,110 +154,28 @@ export default class mchBadgeAdapter
 			}
 		}
 		for (const usbInterface of this.#interfaces) {
-			await this.#sendState(usbInterface, 1)
-			await this.#listen(usbInterface)
+			await this.sendState(usbInterface, 1)
+//			await this.listen(usbInterface)
 		}
-		await this.#setBaudrate(this.#interfaces[0], 115200)
-		await this.#setBaudrate(this.#interfaces[1], 1000000)
-		return this.#resetEsp32ToWebUSB(this.#interfaces[0], 0x01)
+		await this.setBaudrate(this.#interfaces[0], 115200)
+		await this.setBaudrate(this.#interfaces[1], 1000000)
+		return this.resetEsp32ToWebUSB(this.#interfaces[0], 0x01)
 	}
 
-	async #sendControl(usbInterface, request, value)
+}
+
+
+export default class mchBadgeAdapter 
+{
+
+	#path;
+	#exceptionHandler;
+
+	constructor(path, exceptionHandler=null, driver=null)
 	{
-		let endpoint = usbInterface.epOut
-		return this.#device.controlTransferOut({
-			requestType: 'class',
-			recipient: 'interface',
-			request: request,
-			value: value,
-			index: usbInterface.index
-		}).then(result => {
-			console.log(endpoint.endpointNumber, result)
-			return result
-		})
-	}
-
-	async #sendState(usbInterface, state)
-	{
-		return this.#sendControl(usbInterface, 0x22, state)
-	}
-
-	async #resetEsp32(usbInterface, bootloader_mode = false)
-	{
-		return this.#sendControl(usbInterface, 0x23, bootloader_mode ? 0x01 : 0x00)
-	}
-
-	async #setBaudrate(usbInterface, baudrate)
-	{
-		return this.#sendControl(usbInterface, 0x24, Math.floor(baudrate/100))
-	}
-
-	async #setMode(usbInterface, mode)
-	{
-		return this.#sendControl(usbInterface, 0x25, mode)
-	}
-
-	async #listen(usbInterface)
-	{
-
-	}
-
-	#setBitstreamMode(mode) {
-		this.#bitstream_state = mode
-	}
-
-	async #wait(time)
-	{
-		return new Promise(r => setTimeout(r, time))
-	}
-
-	async #resetEsp32ToWebUSB(usbInterface, webusb_mode = 0x00)
-	{
-		await this.#setMode(usbInterface, webusb_mode)
-		await this.#wait(50)
-		await this.#resetEsp32(usbInterface, false)
-		await this.#wait(50)
-		await this.#setBaudrate(usbInterface, 115200)
-		await this.#wait(50)
-		this.#setBitstreamMode(0)
-		if (webusb_mode>0) {
-			await this.#wait(3000)
-			await this.#setBaudrate(usbInterface, 912600)
-			await this.#wait(50)
-			await this.#setBaudrate(usbInterface, 912600)
-			await this.#setBitstreamMode(webusb_mode==0x02)
-		}
-	}
-
-	async #sendPacket(usbInterface, packet, transfersize=2048)
-	{
-		let msg = packet.getMessage()
-		let chunks = msg.match(/.{1,transfersize}/g)
-		for (chunk of chunks) {
-			await device.transferOut(usbInterface.endpointNumber, chunk)
-			await this.constructor.#wait(50)
-		}		
-		let response = await this.constructor.#receiveResponse(usbInterface)
-		if (response.message_id!== packet.message_id) {
-			throw new Error('response id '+response.message_id+' does not match packet id '+packet.message_id)
-		}
-		if (response.command!==packet.command.value) {
-			throw new Error('response command '+response.command+' does not match packet '+packet.command.value)
-		}
-		return response.data
-
-	}
-
-	async #receiveResponse(usbInterface)
-	{
-		let maxLength = 1048576 //1MB for now
-		let usbTransferResult = await device.transferIn(usbInterface.endpointNumber, maxLength)
-		if (usbTransferResult.status === 'ok') {
-			let unpacked = struct.unpack_from('<HIHI', usbTransferResult.data.buffer)
-			console.log(unpacked)
-		} else {
-			console.error(usbTransferResult.status, usbTransferResult)
-		}
+		this.#path = path
+		this.#exceptionHandler = exceptionHandler
+		this.driver = driver
 	}
 
 	get name()
@@ -213,11 +215,11 @@ export default class mchBadgeAdapter
 
 	async #appfsList()
 	{
-		let data = await this.constructor.#sendPacket(new WebUSBPacket(APFSLIST))
+		let data = await this.driver.sendPacket(new WebUSBPacket(APFSLIST))
 		let num_apps = struct.unpack_from("<I", data)
 		data = data.slice(4)
 		let list = []
-		for(i=0;i<num_apps;i++) {
+		for(let i=0;i<num_apps;i++) {
 			//@TODO continue here
 		}
 	}

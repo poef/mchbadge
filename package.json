@@ -1,0 +1,22 @@
+{
+  "name": "mchbadge",
+  "version": "0.0.1",
+  "description": "mchbadge filesystem web application",
+  "main": "www/index.html",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/poef/mchbadge.git"
+  },
+  "author": "auke@muze.nl",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/poef/mchbadge/issues"
+  },
+  "homepage": "https://github.com/poef/mchbadge#readme",
+  "devDependencies": {
+    "eslint": "^8.19.0"
+  }
+}
