@@ -1,3 +1,6 @@
 [submodule "www/jsfs"]
 	path = www/jsfs
 	url = git@github.com:poef/jsfs
+[submodule "www/structjs"]
+	path = www/structjs
+	url = git@github.com:lyngklip/structjs
