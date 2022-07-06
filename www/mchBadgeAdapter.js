@@ -5,7 +5,12 @@ let messageIds = 0
 
 const APFSLIST = 4103
 
-class WebUSBPacket() {
+const verification = 0xADDE
+const payloadHeaderLength = 12
+
+
+class WebUSBPacket
+{
 	
 	constructor(command, payload=null) 
 	{
@@ -146,9 +151,9 @@ export default class mchBadgeAdapter
 		let chunks = msg.match(/.{1,transfersize}/g)
 		for (chunk of chunks) {
 			await device.transferOut(usbInterface.endpointNumber, chunk)
-			await this.#wait(50)
+			await this.constructor.#wait(50)
 		}		
-		let response = await this.#receiveResponse(usbInterface)
+		let response = await this.constructor.#receiveResponse(usbInterface)
 		if (response.message_id!== packet.message_id) {
 			throw new Error('response id '+response.message_id+' does not match packet id '+packet.message_id)
 		}
@@ -158,9 +163,6 @@ export default class mchBadgeAdapter
 		return response.data
 
 	}
-
-	const verification = 0xADDE
-	const payloadHeaderLength = 12
 
 	async #receiveResponse(usbInterface)
 	{
@@ -204,19 +206,19 @@ export default class mchBadgeAdapter
 		if (!jsfsPath.isPath(path)) {
 			throw new TypeError(path+' is not a valid path')
 		}
-		if (!['appfs','flash','sdcard'].contains(jsfsPath.head(path))) {
+		if (!['appfs','flash','sdcard'].includes(jsfsPath.head(path))) {
 			throw new TypeError(path+' must start with one of ["/appfs/","/flash/","/sdcard/"]')
 		}
 	}
 
-	#appfsList()
+	async #appfsList()
 	{
-		let data = await self.#sendPacket(new WebUSBPacket(APFSLIST))
+		let data = await this.constructor.#sendPacket(new WebUSBPacket(APFSLIST))
 		let num_apps = struct.unpack_from("<I", data)
 		data = data.slice(4)
 		let list = []
 		for(i=0;i<num_apps;i++) {
-			let 
+			//@TODO continue here
 		}
 	}
 
