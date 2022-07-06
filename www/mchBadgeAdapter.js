@@ -25,7 +25,7 @@ class WebUSBPacket
 	}
 }
 
-class mchBadgeDriver
+export class mchBadgeDriver
 {
 	#device
 	#interfaces = []
