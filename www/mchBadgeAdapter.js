@@ -1,4 +1,24 @@
 import jsfsPath from './jsfs/src/Path.js'
+import struct from './structjs/struct.mjs'
+
+let messageIds = 0
+
+const APFSLIST = 4103
+
+class WebUSBPacket() {
+	
+	constructor(command, payload=null) 
+	{
+		this.command = command
+		this.payload = payload ? payload : ""
+		this.message_id = messageIds++
+	}
+
+	getMessage()
+	{
+		return struct.pack("<HIHI", this.command.value, this.payload.length, 0xADDE)
+	}
+}
 
 export default class mchBadgeAdapter 
 {
@@ -120,9 +140,38 @@ export default class mchBadgeAdapter
 		}
 	}
 
-	#sendPacket(packet, transfersize=2048)
+	async #sendPacket(usbInterface, packet, transfersize=2048)
 	{
+		let msg = packet.getMessage()
+		let chunks = msg.match(/.{1,transfersize}/g)
+		for (chunk of chunks) {
+			await device.transferOut(usbInterface.endpointNumber, chunk)
+			await this.#wait(50)
+		}		
+		let response = await this.#receiveResponse(usbInterface)
+		if (response.message_id!== packet.message_id) {
+			throw new Error('response id '+response.message_id+' does not match packet id '+packet.message_id)
+		}
+		if (response.command!==packet.command.value) {
+			throw new Error('response command '+response.command+' does not match packet '+packet.command.value)
+		}
+		return response.data
 
+	}
+
+	const verification = 0xADDE
+	const payloadHeaderLength = 12
+
+	async #receiveResponse(usbInterface)
+	{
+		let maxLength = 1048576 //1MB for now
+		let usbTransferResult = await device.transferIn(usbInterface.endpointNumber, maxLength)
+		if (usbTransferResult.status === 'ok') {
+			let unpacked = struct.unpack_from('<HIHI', usbTransferResult.data.buffer)
+			console.log(unpacked)
+		} else {
+			console.error(usbTransferResult.status, usbTransferResult)
+		}
 	}
 
 	get name()
@@ -160,6 +209,17 @@ export default class mchBadgeAdapter
 		}
 	}
 
+	#appfsList()
+	{
+		let data = await self.#sendPacket(new WebUSBPacket(APFSLIST))
+		let num_apps = struct.unpack_from("<I", data)
+		data = data.slice(4)
+		let list = []
+		for(i=0;i<num_apps;i++) {
+			let 
+		}
+	}
+
 	cd(path)
 	{
 		this.#checkPath(path)
@@ -192,6 +252,15 @@ export default class mchBadgeAdapter
 	async list(path)
 	{
 		this.#checkPath(path)
-
+		const root = jsfsPath.head(path)
+		switch(root) {
+			case 'appfs':
+				return this.#appfsList()
+			break;
+			case 'flash':
+			//fallthrough
+			case 'sdcard':
+			break;
+		}
 	}
 }
