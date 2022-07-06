@@ -3,8 +3,11 @@
 <div id="out"></div>
 <script type="module">
 import FileSystem from './jsfs/src/FileSystem.js'
-import mchBadgeAdapter from './mchBadgeAdapter.js'
+import {mchBadgeDriver, mchBadgeAdapter} from './mchBadgeAdapter.js'
 
-const badge = new mchBadgeAdapter()
+const driver = new mchBadgeDriver()
+const badge = new mchBadgeAdapter('/',null,driver)
 window.badge = badge
+console.log(badge)
+driver.initialize()
 </script>
