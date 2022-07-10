@@ -1,12 +1,15 @@
 <!doctype html>
 <h1>mchBadgeTest</h1>
 <button data-simply-command="init">Connect</button>
-<button data-simply-command="appfs">AppFS</button>
+<button data-simply-command="list" data-simply-value="/appfs/">AppFS</button>
+<button data-simply-command="list" data-simply-value="/sdcard/">sdcard</button>
+<button data-simply-command="list" data-simply-value="/flash/">flash</button>
+
 <div id="out"></div>
 <script src="https://unpkg.com/simplyview@2.0.2/dist/simply.everything.js"></script>
 <script type="module">
 import FileSystem from './jsfs/src/FileSystem.js'
-import {mchBadgeDriver, mchBadgeAdapter} from './mchBadgeAdapter.js'
+import {mchBadgeDriver, mchBadgeAdapter} from './mchBadgeAdapter2.js'
 
 const driver = new mchBadgeDriver()
 const badge = new mchBadgeAdapter('/',null,driver)
@@ -19,8 +22,9 @@ const app = simply.app({
         init: function(el, value) {
             driver.initialize()
         },
-        appfs: function(el, value) {
-            badge.list('/appfs/')            
+        list: async function(el, path) {
+            let list = await badge.list(path)
+            console.log(list)
         }
     }
 })
