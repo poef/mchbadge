@@ -18,8 +18,8 @@ const APFSLIST = 4103,
     APPFSDEL = 4104,
     APPFSWRITE = 4105
     
-const verification = 0xADDE
-const payloadHeaderLength = 12
+const magic = 0xFEEDF00D; //0x0DF0EDFE; //0xFEEDF00D
+const headerLength = 20
 
 window.struct = struct
 
@@ -76,19 +76,31 @@ function crc32FromArrayBuffer(dsArr) {
     return (crc ^ (-1)) >>> 0;
 }
 
+const packetFormat = {
+	'magic': 'I',
+	'message_id': 'I',
+	'command':'I',
+	'payload_lenth':'I',
+	'payload_crc':'I'
+}
+
+
 class WebUSBPacket
 {
 	
 	constructor(command, payload=null) 
 	{
-		this.command = command
-		this.payload = payload ? payload : ""
-		this.message_id = messageIds++
+		this.magic       = magic
+		this.command     = command
+		this.payload     = payload ? payload : ""
+		this.message_id  = messageIds++
+		this.payload_crc = payload ? crc32FromArrayBuffer(payload) : 0
 	}
 
 	getMessageHeader()
 	{
-		return struct("<HIHI").pack(this.command, this.payload.length+1, 0xADDE, this.message_id)
+		let formatString = '<'+Object.values(packetFormat).join('')
+		return struct(formatString).pack(this.magic, this.message_id, this.command, this.payload.length, this.payload_crc)
 	}
 	
 	getPayload() {
@@ -101,12 +113,27 @@ class WebUSBPacket
 		console.log('packet header',header)
 		console.log('packet payload',payload)		
 		console.log(header.length,payload.length)
-		let result = new Uint8Array(header.length+payload.length+1)
+		let result = new Uint8Array(header.length+payload.length)
 		result.set(header)
 		result.set(payload, header.length)
-		result.set(new Uint8Array(0), header.length+payload.length)
 		console.log('message from getMessage()',result)
 		return result.buffer
+	}
+	
+	fromPacket(packet) {
+		let formatString = '<'+Object.values(packetFormat).join('')
+		let [magic,message_id,command,payload_length,payload_crc] = struct(formatString).unpack(packet)
+		let data = packet.slice(headerLength)
+		if (data.length>=payload_length) {
+			//@TODO: crc check
+			let packet = new WebUSBPacket(command, data)
+		} else {
+			let packet = new WebUSBPacket(command)
+			packet.payload_length = payload_length
+			packet.payload_crc = payload_crc
+		}			
+		packet.message_id = message_id
+		return packet
 	}
 }
 
@@ -175,7 +202,7 @@ class mchBadgeDriver
 		this.setBitstreamMode(0)
 		if (webusb_mode>0) {
 			await this.wait(3000)
-			await this.setBaudrate(usbInterface, 912600)
+//			await this.setBaudrate(usbInterface, 912600)
 //			await this.wait(50)
 //			await this.setBaudrate(usbInterface, 912600)
 //			await this.setBitstreamMode(webusb_mode==0x02)
@@ -201,6 +228,13 @@ class mchBadgeDriver
 			throw new Error('response command '+response.command+' does not match packet '+packet.command)
 		}
 		return response.data
+	}
+
+	async test(command) {
+		let packet = new WebUSBPacket(command)
+		console.log(packet)
+		let response = await this.sendPacket(this.interfaces[0],packet)
+		console.log(response)
 	}
 
 	async receiveResponse(usbInterface, message_id)
@@ -271,11 +305,10 @@ class mchBadgeDriver
 		}
 		for (const usbInterface of this.interfaces) {
 			await this.sendState(usbInterface, 1)
-//			await this.listen(usbInterface)
+			this.listen(usbInterface)
 		}
 		await this.setBaudrate(this.interfaces[0], 115200)
-		await this.setBaudrate(this.interfaces[1], 1000000)
-		return this.resetEsp32ToWebUSB(this.interfaces[0], 0x01)
+		return this.resetEsp32ToWebUSB(this.interfaces[0], 0x03)
 	}
 
 	bufferToString(buffer) {
@@ -306,54 +339,33 @@ class mchBadgeDriver
 				newReceived.set(received)
 				newReceived.set(bytes, received.length)
 				received = newReceived
-				let dead = false
+				let feedfood = false
 				let start = false
-				let de = received.indexOf(0xDE)
-				while(de!==-1) {
-					if (received[de+1]===0xAD) {
-						dead = de
-						console.log('dead found at '+de)
-						de = -1;
-					} else {
-						de = received.indexOf(0xDE, de)
-					}
-				}
-				if (dead) {
-					start = dead - 6
-					if (start<0) {
-						console.log('dead found too early')
-						continue
-					}
+				let search = new Uint32Array(received.slice(0, Math.floor(received.length/4)*4))
+				let magicPosition = search.indexOf(magic);
+				if (magicPosition!==-1) {
+					console.log('magic found at '+magicPosition)
+					start = magicPosition*4
 					newReceived = new Uint8Array(received.length - start)
 					newReceived.set(received.slice(start))
 					received = newReceived
 					console.log('received', this.bytesToString(received))
 				}
 				let header = false
+				let packet = false
 				if (start!==false) {
-					if (received.length>payloadHeaderLength) {
+					if (received.length>headerLength) {
 						console.log('jay')
-						let [command,payloadlen,verify,message_id] = struct('<HIHI').unpack(received.buffer)
-						header = {
-							command: command,
-							payloadlen: payloadlen,
-							verify: verify,
-							message_id: message_id
-						}
-						console.log('message header',header)
+						packet = WebUSBPacket.fromPacket(received.buffer)
+						console.log('message header',packet)
 					}
 				}
 				let message = false				
-				if (header && received.length>=payloadHeaderLength + header.payloadlen) {
-					let data = received.slice(payloadHeaderLength, payloadHeaderLength+header.payloadlen)
-					message = {
-						command: header.command,
-						message_id: header.message_id,
-						data: data
-					}
+				if (packet && packet.data) {
+					message = packet
 					console.log('message',message)
 					this.messages[message.message_id] = message
-					received = received.slice(payloadHeaderLength+header.payloadlen)
+					received = received.slice(headerLength+message.data.length)
 				}
 				if (message && this.listeners[message.message_id]) {
 					console.log(message.message_id+' found, calling')
@@ -361,17 +373,6 @@ class mchBadgeDriver
 				} else if (message) {
 					console.log(message.message_id+' not found', Object.keys(this.listeners))
 				}
-					
-/*
-				let [command,payloadlen,verify,message_id] = struct('<HIHI').unpack(usbTransferResult.data.buffer)
-				let data = new DataView(usbTransferResult.data.buffer, payloadHeaderLength)
-				this.messages[message_id] = {
-					command: command,
-					data: data,
-					verify: verify
-				}
-				console.log(message_id,this.messages[message_id])
-*/
 			}
 		}
 	}

@@ -18,8 +18,8 @@ const APFSLIST = 4103,
     APPFSDEL = 4104,
     APPFSWRITE = 4105
     
-const verification = 0xADDE
-const payloadHeaderLength = 12
+const verification = 0xFEEDF00d //0xADDE
+const payloadHeaderLength = 20
 
 window.struct = struct
 
@@ -88,7 +88,7 @@ class WebUSBPacket
 
 	getMessageHeader()
 	{
-		return struct("<HIHI").pack(this.command, this.payload.length+1, 0xADDE, this.message_id)
+		return struct("<IIIII").pack(verification, this.message_id, this.command, this.payload.length, 0) //crc
 	}
 	
 	getPayload() {
@@ -101,10 +101,9 @@ class WebUSBPacket
 		console.log('packet header',header)
 		console.log('packet payload',payload)		
 		console.log(header.length,payload.length)
-		let result = new Uint8Array(header.length+payload.length+1)
+		let result = new Uint8Array(header.length+payload.length)
 		result.set(header)
 		result.set(payload, header.length)
-		result.set(new Uint8Array(0), header.length+payload.length)
 		console.log('message from getMessage()',result)
 		return result.buffer
 	}
@@ -175,7 +174,7 @@ class mchBadgeDriver
 		this.setBitstreamMode(0)
 		if (webusb_mode>0) {
 			await this.wait(3000)
-			await this.setBaudrate(usbInterface, 912600)
+			await this.setBaudrate(usbInterface, 115200) //912600)
 //			await this.wait(50)
 //			await this.setBaudrate(usbInterface, 912600)
 //			await this.setBitstreamMode(webusb_mode==0x02)
@@ -185,6 +184,7 @@ class mchBadgeDriver
 
 	async sendPacket(usbInterface, packet, transfersize=2048)
 	{
+		console.log(packet)
 		console.log('send msg id ',packet.message_id);
 		let msg = packet.getMessage()
 		console.log('send msg content ',this.bufferToString(msg))
@@ -274,8 +274,7 @@ class mchBadgeDriver
 //			await this.listen(usbInterface)
 		}
 		await this.setBaudrate(this.interfaces[0], 115200)
-		await this.setBaudrate(this.interfaces[1], 1000000)
-		return this.resetEsp32ToWebUSB(this.interfaces[0], 0x01)
+		return this.resetEsp32ToWebUSB(this.interfaces[0], 0x03)
 	}
 
 	bufferToString(buffer) {
@@ -289,6 +288,13 @@ class mchBadgeDriver
 			return prev
 		},'')
 		return string
+	}
+
+	async test(command) {
+		let packet = new WebUSBPacket(command)
+		let response = await this.sendPacket(this.interfaces[0], packet)
+		console.log(response)
+		return response
 	}
 	
 	async listen(usbInterface) {
