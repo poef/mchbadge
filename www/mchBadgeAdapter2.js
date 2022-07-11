@@ -323,7 +323,24 @@ class mchBadgeDriver
 		},'')
 		return string
 	}
-	
+
+	#findMagicMarker(bytes) {
+		// stupid code that should work
+		let magic = [0x0d,0xf0,0xed,0xfe];
+		let start = bytes.indexOf(magic[0]);
+		while (start!==-1) {
+			if (bytes.length<start+4) {
+				return -1
+			}
+			if (bytes[start+1]===magic[1] && bytes[start+2]===magic[2] && bytes[start+3]===magic[3]) {
+				console.log('magic',start,this.bytesToString(bytes.slice(start,start+4)))
+				return start;
+			}
+			start = bytes.indexOf(magic[0], start+1)
+		}			
+		return -1 
+	}
+		
 	async listen(usbInterface) {
 		this.listening[usbInterface.index] = true //@FIXME: endpointnumber is incorrect, should be interface index
 		let usbTransferResult
@@ -333,7 +350,7 @@ class mchBadgeDriver
 			usbTransferResult = await this.#device.transferIn(usbInterface.epIn.endpointNumber, maxLength)
 			
 			if (usbTransferResult.status === 'ok') {
-				console.log('bytestring',this.bufferToString(usbTransferResult.data.buffer))
+				//console.log('bytestring',this.bufferToString(usbTransferResult.data.buffer))
 				let bytes = new Uint8Array(usbTransferResult.data.buffer)
 				let newReceived = new Uint8Array(received.length + bytes.length)
 				newReceived.set(received)
@@ -341,11 +358,10 @@ class mchBadgeDriver
 				received = newReceived
 				let feedfood = false
 				let start = false
-				let search = new Uint32Array(received.slice(0, Math.floor(received.length/4)*4))
-				let magicPosition = search.indexOf(magic);
+				let magicPosition = this.#findMagicMarker(received)
 				if (magicPosition!==-1) {
 					console.log('magic found at '+magicPosition)
-					start = magicPosition*4
+					start = magicPosition
 					newReceived = new Uint8Array(received.length - start)
 					newReceived.set(received.slice(start))
 					received = newReceived
