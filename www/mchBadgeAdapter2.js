@@ -120,7 +120,7 @@ class WebUSBPacket
 		return result.buffer
 	}
 	
-	fromPacket(packet) {
+	static fromPacket(packet) {
 		let formatString = '<'+Object.values(packetFormat).join('')
 		let [magic,message_id,command,payload_length,payload_crc] = struct(formatString).unpack(packet)
 		let data = packet.slice(headerLength)
