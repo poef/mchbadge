@@ -23,6 +23,32 @@ const headerLength = 20
 
 window.struct = struct
 
+var makeCRCTable = function(){
+    var c;
+    var crcTable = [];
+    for(var n =0; n < 256; n++){
+        c = n;
+        for(var k =0; k < 8; k++){
+            c = ((c&1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1));
+        }
+        crcTable[n] = c;
+    }
+    return crcTable;
+}
+
+var crc32 = function(buffer) {
+    var crcTable = window.crcTable || (window.crcTable = makeCRCTable());
+    var crc = 0 ^ (-1);
+    var input = new Uint8Array(buffer)
+    for (var i = 0; i < input.byteLength; i++ ) {
+        crc = (crc >>> 8) ^ crcTable[(crc ^ input[i]) & 0xFF];
+    }
+
+    return (crc ^ (-1)) >>> 0;
+};
+
+window.crc32 = crc32
+
 function crc32FromArrayBuffer(dsArr) {
     var table = new Uint32Array([
         0x00000000, 0x77073096, 0xee0e612c, 0x990951ba, 0x076dc419, 0x706af48f,
@@ -76,6 +102,8 @@ function crc32FromArrayBuffer(dsArr) {
     return (crc ^ (-1)) >>> 0;
 }
 
+window.crc32Original = crc32FromArrayBuffer
+
 const packetFormat = {
 	'magic': 'I',
 	'message_id': 'I',
@@ -92,15 +120,31 @@ class WebUSBPacket
 	{
 		this.magic       = magic
 		this.command     = command
-		this.payload     = payload ? payload : ""
+		if (typeof payload==='string') {
+			var buffpayload = new TextEncoder().encode(payload).buffer
+		} else {
+			var buffpayload = payload
+		}
+		if (buffpayload && !(buffpayload instanceof ArrayBuffer)) {
+			throw new Error('payload must implement ArrayBuffer or be a plain string');
+		}
+		this.payload     = buffpayload ? buffpayload : ""
 		this.message_id  = messageIds++
-		this.payload_crc = payload ? crc32FromArrayBuffer(payload) : 0
+		this.payload_crc = buffpayload ? crc32(buffpayload) : 0
 	}
 
 	getMessageHeader()
 	{
 		let formatString = '<'+Object.values(packetFormat).join('')
-		return struct(formatString).pack(this.magic, this.message_id, this.command, this.payload.length, this.payload_crc)
+		let command = new TextEncoder().encode(this.command);
+//		console.log('encoded command',command,this.command)		
+		return struct(formatString).pack(
+			this.magic, 
+			this.message_id, 
+			struct('<I').unpack(command.buffer), 
+			this.payload.byteLength, 
+			this.payload_crc
+		)
 	}
 	
 	getPayload() {
@@ -110,30 +154,43 @@ class WebUSBPacket
 	getMessage() {
 		let header = new Uint8Array(this.getMessageHeader())
 		let payload = new Uint8Array(this.getPayload())
-		console.log('packet header',header)
-		console.log('packet payload',payload)		
+//		console.log('packet header',header)
+//		console.log('packet payload',payload)		
 		console.log(header.length,payload.length)
 		let result = new Uint8Array(header.length+payload.length)
 		result.set(header)
 		result.set(payload, header.length)
-		console.log('message from getMessage()',result)
+//		console.log('message from getMessage()',result)
 		return result.buffer
 	}
 	
-	static fromPacket(packet) {
+	static fromMessage(message) {
 		let formatString = '<'+Object.values(packetFormat).join('')
-		let [magic,message_id,command,payload_length,payload_crc] = struct(formatString).unpack(packet)
-		let data = packet.slice(headerLength)
-		if (data.length>=payload_length) {
+		let [magic,message_id,command,payload_length,payload_crc] = struct(formatString).unpack(message)
+		command = struct('<I').pack(command)
+		command = new TextDecoder().decode(command);
+		let data = message.slice(headerLength)
+		let result = {}
+/*
+		console.log('parsed', {
+			magic: magic,
+			message_id: message_id,
+			command: command,
+			payload_length: payload_length,
+			payload_crc: payload_crc,
+			data: data
+		})
+*/
+		if (data.byteLength>=payload_length) {
 			//@TODO: crc check
-			let packet = new WebUSBPacket(command, data)
+			result = new WebUSBPacket(command, data)
 		} else {
-			let packet = new WebUSBPacket(command)
-			packet.payload_length = payload_length
-			packet.payload_crc = payload_crc
+			result = new WebUSBPacket(command)
+			result.payload_length = payload_length
+			result.payload_crc = payload_crc
 		}			
-		packet.message_id = message_id
-		return packet
+		result.message_id = message_id
+		return result
 	}
 }
 
@@ -146,7 +203,8 @@ class mchBadgeDriver
 	messages = {}
 	listeners = []
 	listening = []
-	
+	received = new Uint8Array(0)
+
 	async sendControl(usbInterface, request, value)
 	{
 		let endpoint = usbInterface.epOut
@@ -224,15 +282,14 @@ class mchBadgeDriver
 		if (response.message_id!== packet.message_id) {
 			throw new Error('response id '+response.message_id+' does not match packet id '+packet.message_id)
 		}
-		if (response.command!==packet.command) {
-			throw new Error('response command '+response.command+' does not match packet '+packet.command)
-		}
 		return response.data
 	}
 
-	async test(command) {
-		let packet = new WebUSBPacket(command)
-		console.log(packet)
+	async test(command, payload='') {
+		let packet = new WebUSBPacket(command, payload)
+		console.log('sending',packet)
+		let parsed = WebUSBPacket.fromMessage(packet.getMessage())
+		console.log('parsed packet', parsed)
 		let response = await this.sendPacket(this.interfaces[0],packet)
 		console.log(response)
 	}
@@ -345,50 +402,60 @@ class mchBadgeDriver
 		this.listening[usbInterface.index] = true //@FIXME: endpointnumber is incorrect, should be interface index
 		let usbTransferResult
 		let maxLength = 1000000
-		let received = new Uint8Array(0)
+		//let received = new Uint8Array(0)
 		while(1) {
+			let continueParsing = false
 			usbTransferResult = await this.#device.transferIn(usbInterface.epIn.endpointNumber, maxLength)
 			
 			if (usbTransferResult.status === 'ok') {
 				//console.log('bytestring',this.bufferToString(usbTransferResult.data.buffer))
 				let bytes = new Uint8Array(usbTransferResult.data.buffer)
-				let newReceived = new Uint8Array(received.length + bytes.length)
-				newReceived.set(received)
-				newReceived.set(bytes, received.length)
-				received = newReceived
-				let feedfood = false
-				let start = false
-				let magicPosition = this.#findMagicMarker(received)
-				if (magicPosition!==-1) {
-					console.log('magic found at '+magicPosition)
-					start = magicPosition
-					newReceived = new Uint8Array(received.length - start)
-					newReceived.set(received.slice(start))
-					received = newReceived
-					console.log('received', this.bytesToString(received))
-				}
-				let header = false
-				let packet = false
-				if (start!==false) {
-					if (received.length>headerLength) {
-						console.log('jay')
-						packet = WebUSBPacket.fromPacket(received.buffer)
-						console.log('message header',packet)
+				//console.log(this.bytesToString(bytes));
+				let newReceived = new Uint8Array(this.received.length + bytes.length)
+				newReceived.set(this.received)
+				newReceived.set(bytes, this.received.length)
+				this.received = newReceived
+				console.log(this.received)
+				/*
+				do {
+					continueParsing = false
+					let feedfood = false
+					let start = false
+					let magicPosition = this.#findMagicMarker(received)
+					if (magicPosition!==-1) {
+						//console.log('magic found at '+magicPosition)
+						start = magicPosition
+						newReceived = new Uint8Array(received.length - start)
+						newReceived.set(received.slice(start))
+						received = newReceived
+						console.log('received', this.bytesToString(received))
 					}
-				}
-				let message = false				
-				if (packet && packet.data) {
-					message = packet
-					console.log('message',message)
-					this.messages[message.message_id] = message
-					received = received.slice(headerLength+message.data.length)
-				}
-				if (message && this.listeners[message.message_id]) {
-					console.log(message.message_id+' found, calling')
-					this.listeners[message.message_id](message)
-				} else if (message) {
-					console.log(message.message_id+' not found', Object.keys(this.listeners))
-				}
+					let header = false
+					let packet = false
+					if (start!==false) {
+						if (received.byteLength>headerLength) {
+							console.log('jay')
+							packet = WebUSBPacket.fromMessage(received.buffer)
+							console.log('received message header',packet)
+						}
+					}
+					let message = false
+					if (packet && typeof packet.payload !== 'undefined') {
+						message = packet
+						console.log('received message',message)
+						this.messages[message.message_id] = message
+						received = received.slice(headerLength+message.payload.byteLength)
+						console.log('trimmed received',received.byteLength,this.bytesToString(received))
+						continueParsing = true
+					}
+					if (message && this.listeners[message.message_id]) {
+						console.log(message.message_id+' found, calling')
+						this.listeners[message.message_id](message)
+					} else if (message) {
+						console.log(message.message_id+' not found', Object.keys(this.listeners))
+					}
+				} while (continueParsing)
+				*/
 			}
 		}
 	}

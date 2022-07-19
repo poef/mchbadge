@@ -4,12 +4,15 @@
 <button data-simply-command="list" data-simply-value="/appfs/">AppFS</button>
 <button data-simply-command="list" data-simply-value="/sdcard/">sdcard</button>
 <button data-simply-command="list" data-simply-value="/flash/">flash</button>
+<button data-simply-command="ping" data-simply-value="pong">ping</button>
 
 <div id="out"></div>
+<script src="https://unpkg.com/crc-32@1.2.2/crc32.js"></script>
 <script src="https://unpkg.com/simplyview@2.0.2/dist/simply.everything.js"></script>
 <script type="module">
 import FileSystem from './jsfs/src/FileSystem.js'
-import {mchBadgeDriver, mchBadgeAdapter} from './mchBadgeAdapter2.js'
+import {mchBadgeDriver} from './mchBadgeDriver.js'
+import {mchBadgeAdapter} from './mchBadgeAdapter2.js'
 
 const driver = new mchBadgeDriver()
 const badge = new mchBadgeAdapter('/',null,driver)
@@ -25,6 +28,10 @@ const app = simply.app({
         list: async function(el, path) {
             let list = await badge.list(path)
             console.log(list)
+        },
+        ping: async function(el, value) {
+            let pong = await badge.ping(value)
+            console.log(pong)
         }
     }
 })
